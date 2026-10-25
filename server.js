@@ -28,7 +28,7 @@ mongoose.connect(MONGO_URI)
   .then(() => console.log('Connected to MongoDB Atlas (AURA DB)'))
   .catch((err) => console.error('MongoDB connection error:', err));
 
-const utapi = new UTApi({ apiKey: process.env.UPLOADTHING_SECRET });
+const utapi = new UTApi({ token: process.env.UPLOADTHING_TOKEN });
 const upload = multer({ storage: multer.memoryStorage() });
 
 // Health Check Endpoint for Render.com Deployment
@@ -170,13 +170,13 @@ app.post('/api/uploadthing/upload', authMiddleware, upload.single('pdf'), async 
     if (!req.file) return res.status(400).json({ error: 'No PDF file attached' });
 
     let secureUrl = '';
-    if (process.env.UPLOADTHING_SECRET && !process.env.UPLOADTHING_SECRET.includes('YOUR_')) {
+    if (process.env.UPLOADTHING_TOKEN && !process.env.UPLOADTHING_TOKEN.includes('YOUR_')) {
       const webFile = new File([req.file.buffer], req.file.originalname, {
         type: req.file.mimetype || 'application/pdf'
       });
       const response = await utapi.uploadFiles(webFile);
       if (response.error) throw new Error(response.error.message);
-      secureUrl = response.data.url;
+      secureUrl = response.data.ufsUrl || response.data.url;
     } else {
       secureUrl = `https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf?file=${encodeURIComponent(req.file.originalname)}`;
     }
