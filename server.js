@@ -87,6 +87,19 @@ const authMiddleware = async (req, res, next) => {
   }
 };
 
+// Helper: Verifies if a user is the primary/main administrator
+async function isMainAdmin(user) {
+  if (!user || user.role !== 'Admin' || !user.isApproved) return false;
+  if (user.isPrimaryAdmin) return true;
+  // Fallback to earliest approved admin if isPrimaryAdmin field is not yet set
+  const primary = await User.findOne({ role: 'Admin', isApproved: true }).sort({ createdAt: 1 });
+  if (primary && String(primary._id) === String(user._id)) {
+    await User.findByIdAndUpdate(user._id, { isPrimaryAdmin: true });
+    return true;
+  }
+  return false;
+}
+
 // ============================================================================
 // 1. AUTHENTICATION & SELF-APPROVING FIRST ADMIN
 // ============================================================================
@@ -121,6 +134,7 @@ app.post('/api/auth/register', async (req, res) => {
       facultyRole: role === 'Faculty' ? facultyRole : null,
       department: role === 'Admin' ? 'Administration' : department,
       isApproved,
+      isPrimaryAdmin: isFirstAdmin,
       clubs: role === 'Admin'
         ? { tech: [], nonTech: [], sports: [], cultural: [], volunteering: [] }
         : (clubs || { tech: [], nonTech: [], sports: [], cultural: [], volunteering: [] })
@@ -137,6 +151,7 @@ app.post('/api/auth/register', async (req, res) => {
     const token = jwt.sign({ id: newUser._id, role: newUser.role }, JWT_SECRET, { expiresIn: '30d' });
     const userObj = newUser.toObject();
     delete userObj.passwordHash;
+    userObj.isPrimaryAdmin = isFirstAdmin;
 
     res.json({ token, user: userObj, isFirstAdmin });
   } catch (err) {
@@ -162,6 +177,7 @@ app.post('/api/auth/login', async (req, res) => {
     const token = jwt.sign({ id: user._id, role: user.role }, JWT_SECRET, { expiresIn: '30d' });
     const userObj = user.toObject();
     delete userObj.passwordHash;
+    userObj.isPrimaryAdmin = await isMainAdmin(user);
 
     res.json({ token, user: userObj });
   } catch (err) {
@@ -174,7 +190,13 @@ app.get('/api/admin/users', authMiddleware, async (req, res) => {
     return res.status(403).json({ error: 'Approved Admin access required' });
   }
   const users = await User.find().select('-passwordHash').sort({ createdAt: -1 });
-  res.json(users);
+  const primary = await User.findOne({ role: 'Admin', isApproved: true }).sort({ createdAt: 1 });
+  const mapped = users.map((u) => {
+    const obj = u.toObject();
+    obj.isPrimaryAdmin = (primary && String(primary._id) === String(u._id)) || u.isPrimaryAdmin === true;
+    return obj;
+  });
+  res.json(mapped);
 });
 
 app.patch('/api/admin/users/:id/approve', authMiddleware, async (req, res) => {
@@ -191,6 +213,80 @@ app.patch('/api/admin/users/:id/approve', authMiddleware, async (req, res) => {
     { new: true }
   ).select('-passwordHash');
   res.json(updated);
+});
+
+// ============================================================================
+// MAIN ADMIN PERSPECTIVE SWITCHER (User POV Testing)
+// ============================================================================
+app.post('/api/admin/switch-account', authMiddleware, async (req, res) => {
+  try {
+    const isMain = await isMainAdmin(req.user);
+    if (!isMain) {
+      return res.status(403).json({
+        error: 'Access denied: Only the main primary administrator is authorized to switch accounts for POV testing.'
+      });
+    }
+
+    const { targetUserId, presetRole, presetDepartment, presetYear, presetFacultyRole } = req.body;
+    let targetUser = null;
+
+    if (targetUserId) {
+      targetUser = await User.findById(targetUserId).select('-passwordHash');
+      if (!targetUser) return res.status(404).json({ error: 'Target user account not found.' });
+    } else if (presetRole) {
+      const cleanDept = presetDepartment || 'CSE';
+      const cleanRole = presetRole;
+      const cleanYr = presetYear || 1;
+      const cleanUsername = `test_${cleanRole.toLowerCase().replace(/\s+/g, '')}_${cleanDept.toLowerCase().replace(/[^a-z0-9]/g, '')}_y${cleanYr}`;
+
+      targetUser = await User.findOne({ username: cleanUsername });
+      if (!targetUser) {
+        const dummyHash = await bcrypt.hash('testpass123', 10);
+        targetUser = await User.create({
+          name: `Test Persona: ${cleanRole} (${cleanDept})`,
+          username: cleanUsername,
+          passwordHash: dummyHash,
+          role: cleanRole,
+          year: ['Student', 'Senior Student'].includes(cleanRole) ? Number(cleanYr) : null,
+          facultyRole: cleanRole === 'Faculty' ? (presetFacultyRole || 'Assistant Prof') : null,
+          department: cleanRole === 'Admin' ? 'Administration' : cleanDept,
+          isApproved: true,
+          clubs: { tech: [], nonTech: [], sports: [], cultural: [], volunteering: [] }
+        });
+      }
+    } else {
+      return res.status(400).json({ error: 'Please provide targetUserId or a preset persona.' });
+    }
+
+    const token = jwt.sign(
+      {
+        id: targetUser._id,
+        role: targetUser.role,
+        isTestingPerspective: true,
+        switchedByAdminId: req.user._id
+      },
+      JWT_SECRET,
+      { expiresIn: '30d' }
+    );
+
+    const userObj = targetUser.toObject();
+    delete userObj.passwordHash;
+
+    res.json({
+      success: true,
+      token,
+      user: userObj,
+      originalAdmin: {
+        id: req.user._id,
+        name: req.user.name,
+        username: req.user.username,
+        role: req.user.role,
+        isPrimaryAdmin: true
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ============================================================================

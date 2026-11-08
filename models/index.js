@@ -20,6 +20,7 @@ const UserSchema = new mongoose.Schema({
     default: null
   },
   isApproved: { type: Boolean, default: true },
+  isPrimaryAdmin: { type: Boolean, default: false },
   clubs: {
     tech: { type: [String], default: [] },
     nonTech: { type: [String], default: [] },
