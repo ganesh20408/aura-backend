@@ -651,6 +651,57 @@ app.get('/api/notifications', authMiddleware, async (req, res) => {
   }
 });
 
+// Helper to dispatch Expo Push Notifications to external device notification bars
+async function dispatchExpoPushNotifications({ pushTokens, title, message, data = {} }) {
+  if (!pushTokens || pushTokens.length === 0) return;
+  const validTokens = [...new Set(pushTokens)].filter(
+    (t) => typeof t === 'string' && (t.startsWith('ExponentPushToken') || t.startsWith('ExpoPushToken'))
+  );
+  if (validTokens.length === 0) return;
+
+  const messages = validTokens.map((to) => ({
+    to,
+    sound: 'default',
+    title: `📢 ${title}`,
+    body: message,
+    data,
+    channelId: 'aura_alerts',
+    priority: 'high'
+  }));
+
+  try {
+    for (let i = 0; i < messages.length; i += 100) {
+      const chunk = messages.slice(i, i + 100);
+      await fetch('https://exp.host/--/api/v2/push/send', {
+        method: 'POST',
+        headers: {
+          'Accept': 'application/json',
+          'Accept-Encoding': 'gzip, deflate',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(chunk)
+      });
+    }
+  } catch (err) {
+    console.error('Expo Push Service error:', err.message);
+  }
+}
+
+app.post('/api/users/push-token', authMiddleware, async (req, res) => {
+  try {
+    const { pushToken } = req.body;
+    if (!pushToken) return res.status(400).json({ error: 'Push token required' });
+    if (!req.user.pushTokens) req.user.pushTokens = [];
+    if (!req.user.pushTokens.includes(pushToken)) {
+      req.user.pushTokens.push(pushToken);
+      await req.user.save();
+    }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/notifications', authMiddleware, async (req, res) => {
   try {
     if (!['Admin', 'Faculty'].includes(req.user.role)) {
@@ -693,6 +744,67 @@ app.post('/api/notifications', authMiddleware, async (req, res) => {
       targetCulturalAssociations: targetCulturalAssociations || [],
       targetVolunteeringGroups: targetVolunteeringGroups || []
     });
+
+    // Collect recipient push tokens and dispatch push alerts to notification bar outside app
+    let recipientUsers = [];
+    if (note.targetAll) {
+      recipientUsers = await User.find({ 'pushTokens.0': { $exists: true } }).select('pushTokens');
+    } else {
+      const candidates = await User.find({ 'pushTokens.0': { $exists: true } });
+      recipientUsers = candidates.filter((u) => {
+        const hasDeptFilter = (note.targetDepartments || []).length > 0;
+        const hasTechFilter = (note.targetTechClubs || []).length > 0;
+        const hasNonTechFilter = (note.targetNonTechClubs || []).length > 0;
+        const hasSportsFilter = (note.targetSportsTeams || []).length > 0;
+        const hasCulturalFilter = (note.targetCulturalAssociations || []).length > 0;
+        const hasVolunteeringFilter = (note.targetVolunteeringGroups || []).length > 0;
+
+        const hasAnyActivityFilter =
+          hasDeptFilter || hasTechFilter || hasNonTechFilter ||
+          hasSportsFilter || hasCulturalFilter || hasVolunteeringFilter;
+
+        let activityMatches = !hasAnyActivityFilter;
+        if (hasDeptFilter) {
+          if (
+            note.targetDepartments.includes('All') ||
+            note.targetDepartments.includes('General') ||
+            note.targetDepartments.includes(u.department)
+          ) {
+            activityMatches = true;
+          }
+        }
+        if (!activityMatches && hasTechFilter) {
+          if ((note.targetTechClubs || []).some((c) => (u.clubs?.tech || []).includes(c))) activityMatches = true;
+        }
+        if (!activityMatches && hasNonTechFilter) {
+          if ((note.targetNonTechClubs || []).some((c) => (u.clubs?.nonTech || []).includes(c))) activityMatches = true;
+        }
+        if (!activityMatches && hasSportsFilter) {
+          if ((note.targetSportsTeams || []).some((c) => (u.clubs?.sports || []).includes(c))) activityMatches = true;
+        }
+        if (!activityMatches && hasCulturalFilter) {
+          if ((note.targetCulturalAssociations || []).some((c) => (u.clubs?.cultural || []).includes(c))) activityMatches = true;
+        }
+        if (!activityMatches && hasVolunteeringFilter) {
+          if ((note.targetVolunteeringGroups || []).some((c) => (u.clubs?.volunteering || []).includes(c))) activityMatches = true;
+        }
+
+        let yearMatches = true;
+        if (!note.targetAllYears && note.targetYears && note.targetYears.length > 0) {
+          yearMatches = u.year && note.targetYears.includes(Number(u.year));
+        }
+
+        return activityMatches && yearMatches;
+      });
+    }
+
+    const pushTokens = recipientUsers.flatMap((u) => u.pushTokens || []);
+    dispatchExpoPushNotifications({
+      pushTokens,
+      title: note.title,
+      message: note.message,
+      data: { notificationId: String(note._id) }
+    }).catch((e) => console.log('Push dispatch error:', e.message));
 
     res.json(note);
   } catch (err) {
