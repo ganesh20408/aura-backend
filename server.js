@@ -742,7 +742,10 @@ app.put('/api/profile', authMiddleware, async (req, res) => {
       { new: true }
     ).select('-passwordHash');
 
-    res.json(updated);
+    const userObj = updated.toObject();
+    userObj.isPrimaryAdmin = await isMainAdmin(updated);
+
+    res.json(userObj);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
