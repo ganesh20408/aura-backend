@@ -106,15 +106,24 @@ async function isMainAdmin(user) {
 app.post('/api/auth/register', async (req, res) => {
   try {
     const { name, username, password, role, year, facultyRole, department, clubs } = req.body;
-    if (!name || !username || !password) {
-      return res.status(400).json({ error: 'Name, username, and password are required.' });
+    if (!name || !name.trim()) {
+      return res.status(400).json({ error: 'Please enter your full name.' });
+    }
+    if (!username || !username.trim()) {
+      return res.status(400).json({ error: 'Please choose a username.' });
+    }
+    if (!password || !password.trim()) {
+      return res.status(400).json({ error: 'Please choose a password.' });
     }
 
+    const cleanUsername = username.toLowerCase().trim();
     const validationError = validateRoleAndDepartment({ role, year, facultyRole, department });
     if (validationError) return res.status(400).json({ error: validationError });
 
-    const existing = await User.findOne({ username: username.toLowerCase().trim() });
-    if (existing) return res.status(400).json({ error: 'Username is already registered.' });
+    const existing = await User.findOne({ username: cleanUsername });
+    if (existing) {
+      return res.status(400).json({ error: `Username "${cleanUsername}" is already taken. Please choose another username or sign in.` });
+    }
 
     let isApproved = true;
     let isFirstAdmin = false;
@@ -127,7 +136,7 @@ app.post('/api/auth/register', async (req, res) => {
     const passwordHash = await bcrypt.hash(password, 10);
     const newUser = await User.create({
       name: name.trim(),
-      username: username.toLowerCase().trim(),
+      username: cleanUsername,
       passwordHash,
       role,
       year: ['Student', 'Senior Student'].includes(role) ? Number(year) : null,
@@ -162,11 +171,27 @@ app.post('/api/auth/register', async (req, res) => {
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { username, password } = req.body;
-    const user = await User.findOne({ username: username?.toLowerCase().trim() });
-    if (!user) return res.status(400).json({ error: 'Invalid username or password' });
+    if (!username || !username.trim()) {
+      return res.status(400).json({ error: 'Please enter your username.' });
+    }
+    if (!password || !password.trim()) {
+      return res.status(400).json({ error: 'Please enter your password.' });
+    }
+
+    const cleanUsername = username.toLowerCase().trim();
+    const user = await User.findOne({ username: cleanUsername });
+    if (!user) {
+      return res.status(401).json({
+        error: `Username "${cleanUsername}" not found. Please check spelling or tap "Create Account" to register.`
+      });
+    }
 
     const match = await bcrypt.compare(password, user.passwordHash);
-    if (!match) return res.status(400).json({ error: 'Invalid username or password' });
+    if (!match) {
+      return res.status(401).json({
+        error: 'Incorrect password. Please verify and try again.'
+      });
+    }
 
     if (user.role === 'Admin' && !user.isApproved) {
       return res.status(403).json({
