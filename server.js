@@ -48,7 +48,7 @@ function validateRoleAndDepartment({ role, year, facultyRole, department }) {
   if (role === 'Admin') return null;
 
   if (!PROFILE_DEPARTMENTS.includes(department)) {
-    return '"General" is prohibited during registration/profile setup. Choose a valid academic department.';
+    return '"All" is prohibited during registration/profile setup. Choose a valid academic department.';
   }
   if (role === 'Student') {
     if (![1, 2].includes(Number(year))) {
@@ -247,7 +247,7 @@ app.post('/api/uploadthing/upload', authMiddleware, upload.single('pdf'), async 
 });
 
 // ============================================================================
-// 3. ACADEMIC RESOURCES (TRIZ Dimension & Composite Verification)
+// 3. ACADEMIC RESOURCES (TRIZ Dimension & Verification)
 // ============================================================================
 app.post('/api/resources', authMiddleware, async (req, res) => {
   try {
@@ -260,14 +260,22 @@ app.post('/api/resources', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'Invalid department selected' });
     }
 
-    // Strict validation: Only ARCH and DS have 5th Year (Sem 9 and Sem 10).
+    // Optional semester check
+    const semValue = semester && semester !== 'None (Optional)' && semester !== 'None' ? semester : null;
     const isFifthYearDept = FIFTH_YEAR_ELIGIBLE_DEPTS.includes(department);
-    if (['Sem 9', 'Sem 10'].includes(semester) && !isFifthYearDept) {
+
+    if (semValue && ['Sem 9', 'Sem 10'].includes(semValue) && !isFifthYearDept) {
       return res.status(400).json({
         error: `Sem 9 and Sem 10 are strictly restricted to 5-year degree programs (ARCH and DS). ${department} only supports Sem 1 through Sem 8.`
       });
     }
-    if (Number(targetYear) === 5 && !isFifthYearDept) {
+
+    // Target Year: 0 represents "All Years"
+    const parsedYear = (targetYear === 'All Years' || targetYear === 'All' || targetYear === 0 || !targetYear)
+      ? 0
+      : Number(targetYear);
+
+    if (parsedYear === 5 && !isFifthYearDept) {
       return res.status(400).json({
         error: `5th Year is strictly restricted to ARCH and DS departments. ${department} only has 4 years (Sem 1 to 8).`
       });
@@ -278,13 +286,13 @@ app.post('/api/resources', authMiddleware, async (req, res) => {
     const resource = await Resource.create({
       title,
       course: course || 'Core Subject',
-      semester: semester || 'Sem 1',
+      semester: semValue,
       resourceType: resourceType || 'Lecture Notes',
       department,
-      targetYear: Number(targetYear) || req.user.year || 1,
+      targetYear: parsedYear,
       summary: summary || 'AI Summary generated via AURA extraction engine.',
       extractedText: extractedText || `${title} ${course} ${summary}`,
-      tags: tags || [department, semester, resourceType],
+      tags: tags || [department, semValue || 'All Semesters', resourceType].filter(Boolean),
       pdfUrl,
       uploaderId: req.user._id,
       uploaderName: req.user.name,
@@ -481,8 +489,12 @@ app.get('/api/notifications', authMiddleware, async (req, res) => {
         hasSportsFilter || hasCulturalFilter || hasVolunteeringFilter;
 
       const activityTriggers = [];
-      if (hasDeptFilter && n.targetDepartments.includes(user.department)) {
-        activityTriggers.push(`Dept: ${user.department}`);
+      if (hasDeptFilter) {
+        if (n.targetDepartments.includes('All')) {
+          activityTriggers.push('Dept: All Departments');
+        } else if (n.targetDepartments.includes(user.department)) {
+          activityTriggers.push(`Dept: ${user.department}`);
+        }
       }
       const matchedTech = (n.targetTechClubs || []).filter((c) => (user.clubs?.tech || []).includes(c));
       if (matchedTech.length > 0) activityTriggers.push(`Tech: ${matchedTech.join(', ')}`);
@@ -506,7 +518,7 @@ app.get('/api/notifications', authMiddleware, async (req, res) => {
       let yearMatches = true;
       let yearTrigger = null;
 
-      if (n.targetAllYears) {
+      if (n.targetAllYears || (n.targetYears && (n.targetYears.includes(0) || n.targetYears.includes('All Years')))) {
         yearMatches = true;
         yearTrigger = 'All Years';
       } else if (n.targetYears && n.targetYears.length > 0) {
@@ -566,6 +578,9 @@ app.post('/api/notifications', authMiddleware, async (req, res) => {
       targetVolunteeringGroups
     } = req.body;
 
+    const isAllYears = Boolean(targetAllYears) || (targetYears || []).includes(0) || (targetYears || []).includes('All Years');
+    const cleanYears = (targetYears || []).filter(y => y !== 'All Years' && y !== 0).map(Number);
+
     const note = await Notification.create({
       title,
       message,
@@ -573,8 +588,8 @@ app.post('/api/notifications', authMiddleware, async (req, res) => {
       senderName: req.user.name,
       senderRole: req.user.role,
       targetAll: Boolean(targetAll),
-      targetAllYears: Boolean(targetAllYears),
-      targetYears: (targetYears || []).map(Number),
+      targetAllYears: isAllYears,
+      targetYears: cleanYears,
       targetDepartments: targetDepartments || [],
       targetTechClubs: targetTechClubs || [],
       targetNonTechClubs: targetNonTechClubs || [],

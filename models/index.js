@@ -33,14 +33,14 @@ const UserSchema = new mongoose.Schema({
 const ResourceSchema = new mongoose.Schema({
   title: { type: String, required: true },
   course: { type: String, required: true, default: 'Core Engineering' },
-  semester: { type: String, required: true, default: 'Sem 1' },
+  semester: { type: String, default: null }, // Optional semester
   resourceType: {
     type: String,
     enum: ['Lecture Notes', 'Question Bank', 'Lab Manual', 'Syllabus', 'Reference Book'],
     default: 'Lecture Notes'
   },
   department: { type: String, enum: RESOURCE_DEPARTMENTS, required: true },
-  targetYear: { type: Number, default: 1 },
+  targetYear: { type: Number, default: 0 }, // 0 = All Years
   summary: { type: String, required: true },
   extractedText: { type: String, default: '' },
   tags: { type: [String], default: [] },
@@ -58,7 +58,7 @@ const ResourceSchema = new mongoose.Schema({
 // 3. Q&A BOARD SCHEMA
 const QuestionSchema = new mongoose.Schema({
   question: { type: String, required: true },
-  department: { type: String, enum: RESOURCE_DEPARTMENTS, default: 'General' },
+  department: { type: String, enum: RESOURCE_DEPARTMENTS, default: 'All' },
   askerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   askerName: { type: String, required: true },
   askerRole: { type: String, required: true },
@@ -79,7 +79,7 @@ const GuideSchema = new mongoose.Schema({
     enum: ['Placement Tip', 'Course Experience', 'Study Hack', 'Internship Guide', 'Campus Life'],
     default: 'Placement Tip'
   },
-  department: { type: String, enum: RESOURCE_DEPARTMENTS, default: 'General' },
+  department: { type: String, enum: RESOURCE_DEPARTMENTS, default: 'All' },
   content: { type: String, required: true },
   authorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   authorName: { type: String, required: true },
