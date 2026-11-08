@@ -916,6 +916,6 @@ app.put('/api/profile', authMiddleware, async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`AURA Production Backend listening on port ${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`AURA Production Backend listening on 0.0.0.0:${PORT}`);
 });

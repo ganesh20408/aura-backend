@@ -5,7 +5,7 @@
   "description": "AURA Production Backend - Express, MongoDB Atlas, Uploadthing, Multi-Target Notifications",
   "main": "server.js",
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=20.0.0 <23.0.0"
   },
   "scripts": {
     "start": "node server.js",
