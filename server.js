@@ -195,7 +195,10 @@ app.post('/api/auth/login', async (req, res) => {
 
     if (user.role === 'Admin' && !user.isApproved) {
       return res.status(403).json({
-        error: 'Your Admin account is pending approval by the primary Administrator.'
+        error: `Your Administrator account (@${user.username}) is pending authorization by the Primary Administrator. Once approved, you will be able to sign in immediately.`,
+        isPendingApproval: true,
+        adminName: user.name,
+        adminUsername: user.username
       });
     }
 
@@ -215,18 +218,20 @@ app.get('/api/admin/users', authMiddleware, async (req, res) => {
     return res.status(403).json({ error: 'Approved Admin access required' });
   }
   const users = await User.find().select('-passwordHash').sort({ createdAt: -1 });
+  const isPrimary = await isMainAdmin(req.user);
   const primary = await User.findOne({ role: 'Admin', isApproved: true }).sort({ createdAt: 1 });
   const mapped = users.map((u) => {
     const obj = u.toObject();
     obj.isPrimaryAdmin = (primary && String(primary._id) === String(u._id)) || u.isPrimaryAdmin === true;
     return obj;
   });
-  res.json(mapped);
+  res.json({ users: mapped, isCurrentUserPrimaryAdmin: isPrimary });
 });
 
 app.patch('/api/admin/users/:id/approve', authMiddleware, async (req, res) => {
-  if (req.user.role !== 'Admin' || !req.user.isApproved) {
-    return res.status(403).json({ error: 'Approved Admin access required' });
+  const isMain = await isMainAdmin(req.user);
+  if (!isMain) {
+    return res.status(403).json({ error: 'Access denied: Only the Primary Administrator can approve or modify admin accounts.' });
   }
   // Safeguard: Do not allow the primary admin to accidentally unapprove themselves
   if (String(req.params.id) === String(req.user._id) && req.body.isApproved === false) {
@@ -240,19 +245,41 @@ app.patch('/api/admin/users/:id/approve', authMiddleware, async (req, res) => {
   res.json(updated);
 });
 
+app.delete('/api/admin/users/:id', authMiddleware, async (req, res) => {
+  const isMain = await isMainAdmin(req.user);
+  if (!isMain) {
+    return res.status(403).json({ error: 'Access denied: Only the Primary Administrator can reject or remove accounts.' });
+  }
+  if (String(req.params.id) === String(req.user._id)) {
+    return res.status(400).json({ error: 'You cannot delete the Primary Administrator account.' });
+  }
+  await User.findByIdAndDelete(req.params.id);
+  res.json({ success: true, message: 'Account removed successfully.' });
+});
+
 // ============================================================================
-// MAIN ADMIN PERSPECTIVE SWITCHER (User POV Testing)
+// ADMIN PERSPECTIVE SWITCHER (User POV Testing)
+// Main Primary Admin: Full POV (Test Personas + Any Real User Account)
+// Secondary Admins: Sandbox POV (Test Personas ONLY)
 // ============================================================================
 app.post('/api/admin/switch-account', authMiddleware, async (req, res) => {
   try {
-    const isMain = await isMainAdmin(req.user);
-    if (!isMain) {
+    if (req.user.role !== 'Admin' || !req.user.isApproved) {
       return res.status(403).json({
-        error: 'Access denied: Only the main primary administrator is authorized to switch accounts for POV testing.'
+        error: 'Access denied: Only approved administrators are authorized to switch accounts for POV testing.'
       });
     }
 
+    const isMain = await isMainAdmin(req.user);
     const { targetUserId, presetRole, presetDepartment, presetYear, presetFacultyRole } = req.body;
+
+    // Secondary admins are strictly restricted to Test Personas
+    if (targetUserId && !isMain) {
+      return res.status(403).json({
+        error: 'Access denied: Secondary administrators are only authorized to test preset personas. Only the Primary Administrator can switch into specific user accounts.'
+      });
+    }
+
     let targetUser = null;
 
     if (targetUserId) {
@@ -288,7 +315,8 @@ app.post('/api/admin/switch-account', authMiddleware, async (req, res) => {
         id: targetUser._id,
         role: targetUser.role,
         isTestingPerspective: true,
-        switchedByAdminId: req.user._id
+        switchedByAdminId: req.user._id,
+        isPrimaryAdminSwitched: isMain
       },
       JWT_SECRET,
       { expiresIn: '30d' }
@@ -306,7 +334,7 @@ app.post('/api/admin/switch-account', authMiddleware, async (req, res) => {
         name: req.user.name,
         username: req.user.username,
         role: req.user.role,
-        isPrimaryAdmin: true
+        isPrimaryAdmin: isMain
       }
     });
   } catch (err) {
