@@ -11,8 +11,16 @@ const ROLES = ['Student', 'Senior Student', 'Faculty', 'Admin'];
 
 const FACULTY_SUBROLES = ['HOD', 'Professor', 'Assistant Prof', 'Lab Tech'];
 
-// Only ARCH and DS allow 5th Year
+// Only ARCH and DS allow 5th Year (Sem 9 and Sem 10). All other departments have 4 years (Sem 1 to Sem 8).
 const FIFTH_YEAR_ELIGIBLE_DEPTS = ['ARCH', 'DS'];
+
+const STANDARD_SEMESTERS = [
+  'Sem 1', 'Sem 2', 'Sem 3', 'Sem 4', 'Sem 5', 'Sem 6', 'Sem 7', 'Sem 8'
+];
+
+const EXTENDED_SEMESTERS = [
+  ...STANDARD_SEMESTERS, 'Sem 9', 'Sem 10'
+];
 
 const EXTRACURRICULARS = {
   tech: [
@@ -43,5 +51,7 @@ module.exports = {
   ROLES,
   FACULTY_SUBROLES,
   FIFTH_YEAR_ELIGIBLE_DEPTS,
+  STANDARD_SEMESTERS,
+  EXTENDED_SEMESTERS,
   EXTRACURRICULARS
 };

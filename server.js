@@ -12,7 +12,9 @@ const {
   PROFILE_DEPARTMENTS,
   RESOURCE_DEPARTMENTS,
   FACULTY_SUBROLES,
-  FIFTH_YEAR_ELIGIBLE_DEPTS
+  FIFTH_YEAR_ELIGIBLE_DEPTS,
+  STANDARD_SEMESTERS,
+  EXTENDED_SEMESTERS
 } = require('./constants/enums');
 const { User, Resource, Question, Guide, Notification } = require('./models');
 
@@ -58,8 +60,8 @@ function validateRoleAndDepartment({ role, year, facultyRole, department }) {
     const validYears = isFifthYearAllowed ? [3, 4, 5] : [3, 4];
     if (!validYears.includes(y)) {
       return isFifthYearAllowed
-        ? `Senior Students in ${department} must select Year 3, 4, or 5.`
-        : `5th Year is strictly restricted to ARCH and DS departments. ${department} Senior Students must select Year 3 or 4.`;
+        ? `Senior Students in ${department} must select Year 3, 4, or 5 (Semesters 5–10).`
+        : `5th Year (Sem 9 & 10) is strictly restricted to ARCH and DS departments. ${department} only has 4 years (Sem 1 to 8). Please select Year 3 or 4.`;
     }
   } else if (role === 'Faculty') {
     if (!FACULTY_SUBROLES.includes(facultyRole)) {
@@ -221,7 +223,12 @@ app.post('/api/uploadthing/upload', authMiddleware, upload.single('pdf'), async 
       : 'Lecture Notes';
 
     const semMatch = lower.match(/sem\s*([1-9]|10)/i);
-    const detectedSemester = semMatch ? `Sem ${semMatch[1]}` : 'Sem 3';
+    let detectedSemester = semMatch ? `Sem ${semMatch[1]}` : 'Sem 3';
+    // Only ARCH and DS offer Sem 9 and Sem 10; clamp others to Sem 8
+    const isFifthYearUserDept = FIFTH_YEAR_ELIGIBLE_DEPTS.includes(req.user.department);
+    if (!isFifthYearUserDept && ['Sem 9', 'Sem 10'].includes(detectedSemester)) {
+      detectedSemester = 'Sem 8';
+    }
 
     res.json({
       success: true,
@@ -251,6 +258,19 @@ app.post('/api/resources', authMiddleware, async (req, res) => {
 
     if (!RESOURCE_DEPARTMENTS.includes(department)) {
       return res.status(400).json({ error: 'Invalid department selected' });
+    }
+
+    // Strict validation: Only ARCH and DS have 5th Year (Sem 9 and Sem 10).
+    const isFifthYearDept = FIFTH_YEAR_ELIGIBLE_DEPTS.includes(department);
+    if (['Sem 9', 'Sem 10'].includes(semester) && !isFifthYearDept) {
+      return res.status(400).json({
+        error: `Sem 9 and Sem 10 are strictly restricted to 5-year degree programs (ARCH and DS). ${department} only supports Sem 1 through Sem 8.`
+      });
+    }
+    if (Number(targetYear) === 5 && !isFifthYearDept) {
+      return res.status(400).json({
+        error: `5th Year is strictly restricted to ARCH and DS departments. ${department} only has 4 years (Sem 1 to 8).`
+      });
     }
 
     const autoVerify = ['Faculty', 'Admin'].includes(req.user.role) && req.user.isApproved;
