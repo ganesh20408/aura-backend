@@ -28,7 +28,7 @@ mongoose.connect(MONGO_URI)
   .then(() => console.log('Connected to MongoDB Atlas (AURA DB)'))
   .catch((err) => console.error('MongoDB connection error:', err));
 
-const utapi = new UTApi({ apiKey: process.env.UPLOADTHING_SECRET });
+const utapi = new UTApi({ token: process.env.UPLOADTHING_TOKEN });
 const upload = multer({ storage: multer.memoryStorage() });
 
 // Health Check Endpoint for Render.com Deployment
@@ -42,6 +42,9 @@ app.get('/api/health', (req, res) => {
 
 // --- STRICT 5TH YEAR & DEPARTMENT VALIDATOR ---
 function validateRoleAndDepartment({ role, year, facultyRole, department }) {
+  // For Admin, it shouldn't ask any further details
+  if (role === 'Admin') return null;
+
   if (!PROFILE_DEPARTMENTS.includes(department)) {
     return '"General" is prohibited during registration/profile setup. Choose a valid academic department.';
   }
@@ -99,9 +102,11 @@ app.post('/api/auth/register', async (req, res) => {
     if (existing) return res.status(400).json({ error: 'Username is already registered.' });
 
     let isApproved = true;
+    let isFirstAdmin = false;
     if (role === 'Admin') {
       const adminCount = await User.countDocuments({ role: 'Admin' });
-      isApproved = adminCount === 0; // First Admin self-approves automatically
+      isFirstAdmin = adminCount === 0;
+      isApproved = isFirstAdmin; // First Admin self-approves automatically; subsequent admins require approval
     }
 
     const passwordHash = await bcrypt.hash(password, 10);
@@ -112,16 +117,26 @@ app.post('/api/auth/register', async (req, res) => {
       role,
       year: ['Student', 'Senior Student'].includes(role) ? Number(year) : null,
       facultyRole: role === 'Faculty' ? facultyRole : null,
-      department,
+      department: role === 'Admin' ? 'Administration' : department,
       isApproved,
-      clubs: clubs || { tech: [], nonTech: [], sports: [], cultural: [], volunteering: [] }
+      clubs: role === 'Admin'
+        ? { tech: [], nonTech: [], sports: [], cultural: [], volunteering: [] }
+        : (clubs || { tech: [], nonTech: [], sports: [], cultural: [], volunteering: [] })
     });
+
+    // If an Admin registered but is not the first admin, require approval from the first admin
+    if (role === 'Admin' && !isApproved) {
+      return res.json({
+        pendingApproval: true,
+        message: 'Admin account registered successfully! Your account is pending approval by the primary Admin before access is granted.'
+      });
+    }
 
     const token = jwt.sign({ id: newUser._id, role: newUser.role }, JWT_SECRET, { expiresIn: '30d' });
     const userObj = newUser.toObject();
     delete userObj.passwordHash;
 
-    res.json({ token, user: userObj });
+    res.json({ token, user: userObj, isFirstAdmin });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -136,6 +151,12 @@ app.post('/api/auth/login', async (req, res) => {
     const match = await bcrypt.compare(password, user.passwordHash);
     if (!match) return res.status(400).json({ error: 'Invalid username or password' });
 
+    if (user.role === 'Admin' && !user.isApproved) {
+      return res.status(403).json({
+        error: 'Your Admin account is pending approval by the primary Administrator.'
+      });
+    }
+
     const token = jwt.sign({ id: user._id, role: user.role }, JWT_SECRET, { expiresIn: '30d' });
     const userObj = user.toObject();
     delete userObj.passwordHash;
@@ -147,13 +168,21 @@ app.post('/api/auth/login', async (req, res) => {
 });
 
 app.get('/api/admin/users', authMiddleware, async (req, res) => {
-  if (req.user.role !== 'Admin') return res.status(403).json({ error: 'Admin access required' });
+  if (req.user.role !== 'Admin' || !req.user.isApproved) {
+    return res.status(403).json({ error: 'Approved Admin access required' });
+  }
   const users = await User.find().select('-passwordHash').sort({ createdAt: -1 });
   res.json(users);
 });
 
 app.patch('/api/admin/users/:id/approve', authMiddleware, async (req, res) => {
-  if (req.user.role !== 'Admin') return res.status(403).json({ error: 'Admin access required' });
+  if (req.user.role !== 'Admin' || !req.user.isApproved) {
+    return res.status(403).json({ error: 'Approved Admin access required' });
+  }
+  // Safeguard: Do not allow the primary admin to accidentally unapprove themselves
+  if (String(req.params.id) === String(req.user._id) && req.body.isApproved === false) {
+    return res.status(400).json({ error: 'You cannot revoke your own primary Admin privileges.' });
+  }
   const updated = await User.findByIdAndUpdate(
     req.params.id,
     { isApproved: req.body.isApproved },
@@ -170,13 +199,13 @@ app.post('/api/uploadthing/upload', authMiddleware, upload.single('pdf'), async 
     if (!req.file) return res.status(400).json({ error: 'No PDF file attached' });
 
     let secureUrl = '';
-    if (process.env.UPLOADTHING_SECRET && !process.env.UPLOADTHING_SECRET.includes('YOUR_')) {
+    if (process.env.UPLOADTHING_TOKEN && !process.env.UPLOADTHING_TOKEN.includes('YOUR_')) {
       const webFile = new File([req.file.buffer], req.file.originalname, {
         type: req.file.mimetype || 'application/pdf'
       });
       const response = await utapi.uploadFiles(webFile);
       if (response.error) throw new Error(response.error.message);
-      secureUrl = response.data.url;
+      secureUrl = response.data.ufsUrl || response.data.url;
     } else {
       secureUrl = `https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf?file=${encodeURIComponent(req.file.originalname)}`;
     }
@@ -410,39 +439,80 @@ app.get('/api/notifications', authMiddleware, async (req, res) => {
 
     const matched = [];
     for (const n of allNotes) {
-      const triggers = [];
-
+      // 1. All Campus Broadcast
       if (n.targetAll) {
-        triggers.push('Broadcast: All Campus');
-      }
-      if (n.targetDepartments?.includes(user.department)) {
-        triggers.push(`Dept: ${user.department}`);
-      }
-      if (n.targetAllYears) {
-        triggers.push('Year: All Years');
-      } else if (user.year && n.targetYears?.includes(Number(user.year))) {
-        triggers.push(`Year: ${user.year}th/st Year`);
-      }
-
-      const matchedTech = (n.targetTechClubs || []).filter((c) => (user.clubs?.tech || []).includes(c));
-      if (matchedTech.length > 0) triggers.push(`Tech Club: ${matchedTech.join(', ')}`);
-
-      const matchedNonTech = (n.targetNonTechClubs || []).filter((c) => (user.clubs?.nonTech || []).includes(c));
-      if (matchedNonTech.length > 0) triggers.push(`Non-Tech Club: ${matchedNonTech.join(', ')}`);
-
-      const matchedSports = (n.targetSportsTeams || []).filter((c) => (user.clubs?.sports || []).includes(c));
-      if (matchedSports.length > 0) triggers.push(`Sports Team: ${matchedSports.join(', ')}`);
-
-      const matchedCultural = (n.targetCulturalAssociations || []).filter((c) => (user.clubs?.cultural || []).includes(c));
-      if (matchedCultural.length > 0) triggers.push(`Cultural (Shristi): ${matchedCultural.join(', ')}`);
-
-      const matchedVolunteering = (n.targetVolunteeringGroups || []).filter((c) => (user.clubs?.volunteering || []).includes(c));
-      if (matchedVolunteering.length > 0) triggers.push(`Volunteering: ${matchedVolunteering.join(', ')}`);
-
-      if (triggers.length > 0 || String(n.senderId) === String(user._id) || user.role === 'Admin') {
         matched.push({
           ...n.toObject(),
-          entryPathTriggers: triggers.length > 0 ? triggers : ['Sender / Admin Audit Log']
+          entryPathTriggers: ['🌐 Broadcast: All Campus']
+        });
+        continue;
+      }
+
+      // 2. Activity / Organization Filters
+      const hasDeptFilter = (n.targetDepartments || []).length > 0;
+      const hasTechFilter = (n.targetTechClubs || []).length > 0;
+      const hasNonTechFilter = (n.targetNonTechClubs || []).length > 0;
+      const hasSportsFilter = (n.targetSportsTeams || []).length > 0;
+      const hasCulturalFilter = (n.targetCulturalAssociations || []).length > 0;
+      const hasVolunteeringFilter = (n.targetVolunteeringGroups || []).length > 0;
+
+      const hasAnyActivityFilter =
+        hasDeptFilter || hasTechFilter || hasNonTechFilter ||
+        hasSportsFilter || hasCulturalFilter || hasVolunteeringFilter;
+
+      const activityTriggers = [];
+      if (hasDeptFilter && n.targetDepartments.includes(user.department)) {
+        activityTriggers.push(`Dept: ${user.department}`);
+      }
+      const matchedTech = (n.targetTechClubs || []).filter((c) => (user.clubs?.tech || []).includes(c));
+      if (matchedTech.length > 0) activityTriggers.push(`Tech: ${matchedTech.join(', ')}`);
+
+      const matchedNonTech = (n.targetNonTechClubs || []).filter((c) => (user.clubs?.nonTech || []).includes(c));
+      if (matchedNonTech.length > 0) activityTriggers.push(`Non-Tech: ${matchedNonTech.join(', ')}`);
+
+      const matchedSports = (n.targetSportsTeams || []).filter((c) => (user.clubs?.sports || []).includes(c));
+      if (matchedSports.length > 0) activityTriggers.push(`Sports: ${matchedSports.join(', ')}`);
+
+      const matchedCultural = (n.targetCulturalAssociations || []).filter((c) => (user.clubs?.cultural || []).includes(c));
+      if (matchedCultural.length > 0) activityTriggers.push(`Cultural: ${matchedCultural.join(', ')}`);
+
+      const matchedVolunteering = (n.targetVolunteeringGroups || []).filter((c) => (user.clubs?.volunteering || []).includes(c));
+      if (matchedVolunteering.length > 0) activityTriggers.push(`Volunteering: ${matchedVolunteering.join(', ')}`);
+
+      const activityMatches = hasAnyActivityFilter ? (activityTriggers.length > 0) : true;
+
+      // 3. Year Specifics Filter
+      const hasYearFilter = n.targetAllYears || (n.targetYears && n.targetYears.length > 0);
+      let yearMatches = true;
+      let yearTrigger = null;
+
+      if (n.targetAllYears) {
+        yearMatches = true;
+        yearTrigger = 'All Years';
+      } else if (n.targetYears && n.targetYears.length > 0) {
+        if (user.year && n.targetYears.includes(Number(user.year))) {
+          yearMatches = true;
+          yearTrigger = `Year ${user.year}`;
+        } else {
+          yearMatches = false;
+        }
+      }
+
+      // Check if user is a targeted recipient
+      const isTargetRecipient = activityMatches && yearMatches && (hasAnyActivityFilter || hasYearFilter);
+
+      if (isTargetRecipient) {
+        const triggers = [...activityTriggers];
+        if (yearTrigger) triggers.push(yearTrigger);
+        matched.push({
+          ...n.toObject(),
+          entryPathTriggers: triggers.length > 0 ? triggers : ['Target Filter Match']
+        });
+      } else if (String(n.senderId) === String(user._id) || (user.role === 'Admin' && user.isApproved)) {
+        // Admin or sender audit view
+        matched.push({
+          ...n.toObject(),
+          entryPathTriggers: ['Sender / Admin Audit Log']
         });
       }
     }
@@ -457,6 +527,9 @@ app.post('/api/notifications', authMiddleware, async (req, res) => {
   try {
     if (!['Admin', 'Faculty'].includes(req.user.role)) {
       return res.status(403).json({ error: 'Only Admin and Faculty can dispatch multi-target notifications.' });
+    }
+    if (req.user.role === 'Admin' && !req.user.isApproved) {
+      return res.status(403).json({ error: 'Your Admin account is pending approval.' });
     }
 
     const {
@@ -522,18 +595,18 @@ app.get('/api/profile/stats', authMiddleware, async (req, res) => {
 app.put('/api/profile', authMiddleware, async (req, res) => {
   try {
     const { name, role, year, facultyRole, department, clubs } = req.body;
-    const validationError = validateRoleAndDepartment({ role, year, facultyRole, department });
+    const validationError = validateRoleAndDepartment({ role: role || req.user.role, year, facultyRole, department });
     if (validationError) return res.status(400).json({ error: validationError });
 
     const updated = await User.findByIdAndUpdate(
       req.user._id,
       {
         name,
-        role,
-        year: ['Student', 'Senior Student'].includes(role) ? Number(year) : null,
-        facultyRole: role === 'Faculty' ? facultyRole : null,
-        department,
-        clubs
+        role: req.user.role, // Preserve primary role
+        year: ['Student', 'Senior Student'].includes(req.user.role) ? Number(year) : null,
+        facultyRole: req.user.role === 'Faculty' ? facultyRole : null,
+        department: req.user.role === 'Admin' ? 'Administration' : department,
+        clubs: req.user.role === 'Admin' ? { tech: [], nonTech: [], sports: [], cultural: [], volunteering: [] } : clubs
       },
       { new: true }
     ).select('-passwordHash');

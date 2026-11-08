@@ -16,8 +16,8 @@ const UserSchema = new mongoose.Schema({
   facultyRole: { type: String, enum: [...FACULTY_SUBROLES, null], default: null },
   department: {
     type: String,
-    enum: PROFILE_DEPARTMENTS,
-    required: true
+    enum: [...PROFILE_DEPARTMENTS, 'Administration', null],
+    default: null
   },
   isApproved: { type: Boolean, default: true },
   clubs: {
