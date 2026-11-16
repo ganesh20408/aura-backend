@@ -7,7 +7,7 @@ const PROFILE_DEPARTMENTS = [
 // Valid for Uploading, Filtering & Searching (Includes "All" and legacy "General")
 const RESOURCE_DEPARTMENTS = ['All', 'General', ...PROFILE_DEPARTMENTS];
 
-const ROLES = ['Student', 'Senior Student', 'Faculty', 'Admin'];
+const ROLES = ['Student', 'Senior Student', 'Faculty', 'Admin', 'Alumni'];
 
 const FACULTY_SUBROLES = ['HOD', 'Professor', 'Assistant Prof', 'Lab Tech'];
 

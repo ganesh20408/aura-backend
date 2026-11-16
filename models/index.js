@@ -30,7 +30,10 @@ const UserSchema = new mongoose.Schema({
     sports: { type: [String], default: [] },
     cultural: { type: [String], default: [] },
     volunteering: { type: [String], default: [] }
-  }
+  },
+  plusUltraPoints: { type: Number, default: 0 },
+  badges: { type: [String], default: [] },
+  isGraduated: { type: Boolean, default: false }
 }, { timestamps: true });
 
 // 2. RESOURCE SCHEMA (TRIZ Dimension + Composite Materials Rules)
@@ -63,6 +66,8 @@ const ResourceSchema = new mongoose.Schema({
 const QuestionSchema = new mongoose.Schema({
   question: { type: String, required: true },
   department: { type: String, enum: RESOURCE_DEPARTMENTS, default: 'All' },
+  clubCategory: { type: String, enum: ['Tech', 'Non-Tech', 'Sports', 'Cultural', 'Volunteering', null], default: null },
+  clubName: { type: String, default: null },
   askerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   askerName: { type: String, required: true },
   askerRole: { type: String, required: true },
@@ -71,6 +76,9 @@ const QuestionSchema = new mongoose.Schema({
     responderId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     responderName: { type: String, required: true },
     responderRole: { type: String, required: true },
+    isAccepted: { type: Boolean, default: false },
+    upvotes: { type: Number, default: 0 },
+    upvoters: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
     createdAt: { type: Date, default: Date.now }
   }]
 }, { timestamps: true });
@@ -85,6 +93,8 @@ const GuideSchema = new mongoose.Schema({
   },
   department: { type: String, enum: RESOURCE_DEPARTMENTS, default: 'All' },
   content: { type: String, required: true },
+  tags: { type: [String], default: [] },
+  topics: { type: [String], default: [] },
   authorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   authorName: { type: String, required: true },
   authorRole: { type: String, required: true },
