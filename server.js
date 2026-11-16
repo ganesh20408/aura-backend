@@ -16,7 +16,7 @@ const {
   STANDARD_SEMESTERS,
   EXTENDED_SEMESTERS
 } = require('./constants/enums');
-const { User, Resource, Question, Guide, Notification } = require('./models');
+const { User, Resource, Question, Guide, Notification, JobUpdate, BugReport } = require('./models');
 
 const app = express();
 app.use(express.json({ limit: '25mb' }));
@@ -860,6 +860,467 @@ app.post('/api/notifications', authMiddleware, async (req, res) => {
     }).catch((e) => console.log('Push dispatch error:', e.message));
 
     res.json(note);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================================
+// 9. HIRING UPDATES & PLACEMENT RADAR (AI Auto-Tagging + Dept & Admin Approvals)
+// ============================================================================
+
+// AI Auto-Tagging Engine (Level 2)
+function autoTagHiringPost({ role = '', description = '', company = '' }) {
+  const text = `${role} ${description} ${company}`.toLowerCase();
+  const taggedDepts = new Set();
+
+  if (/(software|developer|sde|frontend|backend|fullstack|web|react|node|python|java|c\+\+|javascript|coding|cloud|devops|aws|azure|cyber|security|testing|qa|it|database|sql)/i.test(text)) {
+    taggedDepts.add('CSE');
+    taggedDepts.add('IT');
+  }
+  if (/(data|analyst|analytics|machine learning|ml|ai|artificial intelligence|deep learning|nlp|vision|science)/i.test(text)) {
+    taggedDepts.add('DS');
+    taggedDepts.add('AIML');
+    taggedDepts.add('CSE');
+  }
+  if (/(business|consulting|product|management|analyst|fintech|banking|operations)/i.test(text)) {
+    taggedDepts.add('CSBS');
+  }
+  if (/(circuit|vlsi|verilog|asic|fpga|semiconductor|chip|silicon|hardware)/i.test(text)) {
+    taggedDepts.add('VLSA');
+    taggedDepts.add('ECE');
+  }
+  if (/(electronics|telecom|communication|signal|embedded|iot|dsp|sensor)/i.test(text)) {
+    taggedDepts.add('ECE');
+    taggedDepts.add('EEE');
+  }
+  if (/(power|electrical|grid|battery|ev|motor|energy|high voltage|substation)/i.test(text)) {
+    taggedDepts.add('EEE');
+    taggedDepts.add('EEE(CS)');
+  }
+  if (/(mechanical|manufacturing|thermal|cad|cam|ansys|solidworks|hvac|piping|automobile|chassis|aerospace)/i.test(text)) {
+    taggedDepts.add('MECH');
+  }
+  if (/(robotics|automation|mechatronics|plc|scada|drone|uav|actuator)/i.test(text)) {
+    taggedDepts.add('MECT');
+    taggedDepts.add('MECH');
+  }
+  if (/(civil|structural|construction|surveying|concrete|geotechnical|transportation|autocad civil|staad)/i.test(text)) {
+    taggedDepts.add('CIVIL');
+  }
+  if (/(architect|architecture|urban|landscape|revit|bim|sketchup|interior|space planning)/i.test(text)) {
+    taggedDepts.add('ARCH');
+    taggedDepts.add('Interior design');
+  }
+  if (/(fashion|textile|garment|apparel|merchandiser|fabric|pattern)/i.test(text)) {
+    taggedDepts.add('Fashion Technology');
+  }
+
+  if (taggedDepts.size === 0) {
+    taggedDepts.add('CSE');
+    taggedDepts.add('IT');
+    taggedDepts.add('ECE');
+  }
+
+  const deptsArray = Array.from(taggedDepts);
+  const defaultYears = [3, 4];
+  if (deptsArray.includes('ARCH') || deptsArray.includes('DS')) {
+    defaultYears.push(5);
+  }
+  defaultYears.sort((a, b) => a - b);
+  const optionalYears = [1, 2];
+
+  return {
+    targetDepartments: deptsArray,
+    targetYears: defaultYears,
+    defaultYears,
+    optionalYears
+  };
+}
+
+// 1. AI Auto-tag preview endpoint
+app.post('/api/jobs/ai-autotag', authMiddleware, (req, res) => {
+  const { role, description, company } = req.body;
+  const result = autoTagHiringPost({ role, description, company });
+  res.json(result);
+});
+
+// 2. Fetch all jobs according to role and eligibility
+app.get('/api/jobs', authMiddleware, async (req, res) => {
+  try {
+    const user = req.user;
+    const isAdmin = user.role === 'Admin' && user.isApproved;
+    const inChargeDept = user.placementDepartment || (user.isPlacementInCharge ? user.department : null);
+
+    const allJobs = await JobUpdate.find().sort({ createdAt: -1 });
+
+    if (isAdmin) {
+      return res.json({
+        jobs: allJobs,
+        canApproveGlobally: true,
+        canApproveDepartments: PROFILE_DEPARTMENTS,
+        isPlacementInCharge: true,
+        managedDepartment: 'All (Admin)'
+      });
+    }
+
+    if (user.isPlacementInCharge && inChargeDept) {
+      const visible = allJobs.filter((j) => {
+        const isTargetedForMyDept = (j.targetDepartments || []).includes(inChargeDept);
+        const hasPublishedDept = (j.departmentApprovals || []).some((da) => da.status === 'Published');
+        return isTargetedForMyDept || hasPublishedDept || j.isGloballyPublished;
+      });
+      return res.json({
+        jobs: visible,
+        canApproveGlobally: false,
+        canApproveDepartments: [inChargeDept],
+        isPlacementInCharge: true,
+        managedDepartment: inChargeDept
+      });
+    }
+
+    // Students & Faculty: Only see published jobs where their department is approved and their year is targeted
+    const studentDept = user.department;
+    const studentYear = user.year;
+
+    const visibleForStudent = allJobs.filter((job) => {
+      const deptApproval = (job.departmentApprovals || []).find((da) => da.department === studentDept);
+      const isDeptPublished = deptApproval && deptApproval.status === 'Published';
+      const isPublished = isDeptPublished || job.isGloballyPublished;
+      if (!isPublished) return false;
+
+      if (studentYear && job.targetYears && job.targetYears.length > 0) {
+        if (!job.targetYears.includes(Number(studentYear))) return false;
+      }
+      return true;
+    });
+
+    res.json({
+      jobs: visibleForStudent,
+      canApproveGlobally: false,
+      canApproveDepartments: [],
+      isPlacementInCharge: false,
+      managedDepartment: null
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 3. Create a hiring post
+app.post('/api/jobs', authMiddleware, async (req, res) => {
+  try {
+    const {
+      company,
+      role,
+      jobType,
+      description,
+      applyUrl,
+      sourceUrl,
+      location,
+      stipendOrSalary,
+      deadline,
+      targetDepartments = [],
+      targetYears = [3, 4],
+      adminImmediatePublish = false
+    } = req.body;
+
+    if (!company || !role || !description || !applyUrl) {
+      return res.status(400).json({ error: 'Company, Role, Description, and Apply Link are required.' });
+    }
+
+    const isAdmin = req.user.role === 'Admin' && req.user.isApproved;
+
+    const departmentApprovals = targetDepartments.map((dept) => ({
+      department: dept,
+      status: (isAdmin && adminImmediatePublish) ? 'Published' : 'Pending',
+      approvedBy: (isAdmin && adminImmediatePublish) ? `${req.user.name} (Admin Override)` : null,
+      approvedById: (isAdmin && adminImmediatePublish) ? req.user._id : null,
+      approvedAt: (isAdmin && adminImmediatePublish) ? new Date() : null,
+      notifiedCount: 0
+    }));
+
+    const newJob = await JobUpdate.create({
+      company,
+      role,
+      jobType: jobType || 'Internship',
+      description,
+      applyUrl,
+      sourceUrl: sourceUrl || '',
+      location: location || 'On-site / Hybrid',
+      stipendOrSalary: stipendOrSalary || 'Competitive',
+      deadline: deadline || '',
+      targetDepartments,
+      targetYears,
+      creatorId: req.user._id,
+      creatorName: req.user.name,
+      creatorRole: req.user.role,
+      departmentApprovals,
+      isGloballyPublished: isAdmin && adminImmediatePublish
+    });
+
+    if (isAdmin && adminImmediatePublish) {
+      const candidates = await User.find({
+        department: { $in: targetDepartments },
+        year: { $in: targetYears },
+        'pushTokens.0': { $exists: true }
+      });
+      const pushTokens = candidates.flatMap((u) => u.pushTokens || []);
+      dispatchExpoPushNotifications({
+        pushTokens,
+        title: `💼 New Hiring: ${role} at ${company}`,
+        message: `Hiring open for ${targetDepartments.join(', ')} (${targetYears.map(y => `Yr ${y}`).join(', ')}). Tap to view and apply!`,
+        data: { jobId: String(newJob._id), type: 'hiring' }
+      }).catch((e) => console.log('Push dispatch error:', e.message));
+    }
+
+    res.status(201).json(newJob);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 4. Approve Department(s) for a hiring post
+app.patch('/api/jobs/:id/approve-department', authMiddleware, async (req, res) => {
+  try {
+    const job = await JobUpdate.findById(req.params.id);
+    if (!job) return res.status(404).json({ error: 'Job update not found' });
+
+    const user = req.user;
+    const isAdmin = user.role === 'Admin' && user.isApproved;
+    const inChargeDept = user.placementDepartment || (user.isPlacementInCharge ? user.department : null);
+
+    const { departmentsToApprove = [], isGlobalAdminOverride = false, updatedTargetYears } = req.body;
+
+    if (!isAdmin && !user.isPlacementInCharge) {
+      return res.status(403).json({ error: 'Access denied: Placement in-charge or admin authorization required.' });
+    }
+
+    if (updatedTargetYears && Array.isArray(updatedTargetYears) && updatedTargetYears.length > 0) {
+      job.targetYears = updatedTargetYears;
+    }
+
+    let approvedDepts = [];
+
+    if (isAdmin && (isGlobalAdminOverride || departmentsToApprove.length === 0)) {
+      // Global Admin Override: Approve ALL eligible departments at once
+      job.departmentApprovals.forEach((da) => {
+        da.status = 'Published';
+        da.approvedBy = `${user.name} (Global Admin Override)`;
+        da.approvedById = user._id;
+        da.approvedAt = new Date();
+      });
+      job.isGloballyPublished = true;
+      job.globalApprovedBy = user.name;
+      job.globalApprovedAt = new Date();
+      approvedDepts = [...job.targetDepartments];
+    } else if (isAdmin && departmentsToApprove.length > 0) {
+      // Admin multi-department selective override
+      job.departmentApprovals.forEach((da) => {
+        if (departmentsToApprove.includes(da.department)) {
+          da.status = 'Published';
+          da.approvedBy = `${user.name} (Admin Override)`;
+          da.approvedById = user._id;
+          da.approvedAt = new Date();
+          approvedDepts.push(da.department);
+        }
+      });
+    } else if (user.isPlacementInCharge && inChargeDept) {
+      // Department In-Charge approves strictly for their assigned department
+      const matchApproval = job.departmentApprovals.find((da) => da.department === inChargeDept);
+      if (!matchApproval) {
+        return res.status(400).json({ error: `This opportunity is not targeted to your department (${inChargeDept}).` });
+      }
+      matchApproval.status = 'Published';
+      matchApproval.approvedBy = `${user.name} (${inChargeDept} In-Charge)`;
+      matchApproval.approvedById = user._id;
+      matchApproval.approvedAt = new Date();
+      approvedDepts.push(inChargeDept);
+    }
+
+    await job.save();
+
+    // Dispatch push notifications strictly to students in newly approved departments
+    if (approvedDepts.length > 0) {
+      const candidates = await User.find({
+        department: { $in: approvedDepts },
+        year: { $in: job.targetYears },
+        'pushTokens.0': { $exists: true }
+      });
+      const pushTokens = candidates.flatMap((u) => u.pushTokens || []);
+      dispatchExpoPushNotifications({
+        pushTokens,
+        title: `💼 ${job.company} is Hiring: ${job.role}`,
+        message: `Approved for ${approvedDepts.join(', ')} (${job.targetYears.map(y => `Yr ${y}`).join(', ')}). Apply now on AURA!`,
+        data: { jobId: String(job._id), type: 'hiring' }
+      }).catch((e) => console.log('Push dispatch error:', e.message));
+    }
+
+    res.json({ success: true, job, approvedDepartments: approvedDepts });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 5. Reject department approval for a hiring post
+app.patch('/api/jobs/:id/reject-department', authMiddleware, async (req, res) => {
+  try {
+    const job = await JobUpdate.findById(req.params.id);
+    if (!job) return res.status(404).json({ error: 'Job update not found' });
+
+    const user = req.user;
+    const isAdmin = user.role === 'Admin' && user.isApproved;
+    const inChargeDept = user.placementDepartment || (user.isPlacementInCharge ? user.department : null);
+    const { departmentToReject } = req.body;
+
+    const targetDept = isAdmin ? departmentToReject : inChargeDept;
+    const match = job.departmentApprovals.find((da) => da.department === targetDept);
+    if (!match) return res.status(400).json({ error: 'Department approval entry not found' });
+
+    match.status = 'Rejected';
+    match.approvedBy = `${user.name} (Rejected)`;
+    match.approvedById = user._id;
+    match.approvedAt = new Date();
+
+    await job.save();
+    res.json({ success: true, job });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 6. Delete a job post
+app.delete('/api/jobs/:id', authMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'Admin' || !req.user.isApproved) {
+      return res.status(403).json({ error: 'Admin authorization required' });
+    }
+    await JobUpdate.findByIdAndDelete(req.params.id);
+    res.json({ success: true, message: 'Job update deleted' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 7. Manage Placement In-Charges (Admin only)
+app.get('/api/admin/placement-incharges', authMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'Admin' || !req.user.isApproved) {
+      return res.status(403).json({ error: 'Admin authorization required' });
+    }
+    const incharges = await User.find({ isPlacementInCharge: true }).select('name username department role facultyRole isPlacementInCharge placementDepartment');
+    const allFaculty = await User.find({ role: 'Faculty' }).select('name username department facultyRole isPlacementInCharge placementDepartment');
+    res.json({ incharges, allFaculty, departments: PROFILE_DEPARTMENTS });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/placement-incharges', authMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'Admin' || !req.user.isApproved) {
+      return res.status(403).json({ error: 'Admin authorization required' });
+    }
+    const { userId, isPlacementInCharge, placementDepartment } = req.body;
+    const updated = await User.findByIdAndUpdate(
+      userId,
+      {
+        isPlacementInCharge: Boolean(isPlacementInCharge),
+        placementDepartment: isPlacementInCharge ? (placementDepartment || null) : null
+      },
+      { new: true }
+    ).select('-passwordHash');
+    res.json(updated);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+// ============================================================================
+// 10. BUG REPORTS & SUPPORT FEEDBACK HUB ENDPOINTS
+// ============================================================================
+
+// 1. Submit a bug report / help ticket (User-facing)
+app.post('/api/support/tickets', authMiddleware, async (req, res) => {
+  try {
+    const { category, title, description, severity, screenshotUrl, deviceInfo } = req.body;
+    if (!title || !description) {
+      return res.status(400).json({ error: 'Bug title and description are required.' });
+    }
+
+    const ticket = await BugReport.create({
+      category: category || 'Custom / Other Bug',
+      title,
+      description,
+      severity: severity || 'Medium',
+      screenshotUrl: screenshotUrl || null,
+      deviceInfo: deviceInfo || {},
+      reporterId: req.user._id,
+      reporterName: req.user.name,
+      reporterRole: req.user.role,
+      reporterDepartment: req.user.department,
+      reporterUsername: req.user.username,
+      status: 'Open'
+    });
+
+    res.status(201).json({ success: true, ticket });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 2. Fetch all bug reports (Admin-only Support Hub)
+app.get('/api/support/tickets', authMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'Admin' || !req.user.isApproved) {
+      return res.status(403).json({ error: 'Admin authorization required' });
+    }
+    const tickets = await BugReport.find().sort({ createdAt: -1 });
+    res.json(tickets);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 3. Update bug report status & admin notes
+app.patch('/api/support/tickets/:id', authMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'Admin' || !req.user.isApproved) {
+      return res.status(403).json({ error: 'Admin authorization required' });
+    }
+    const { status, adminNotes } = req.body;
+    const update = {};
+    if (status) {
+      update.status = status;
+      if (['Resolved', 'Closed'].includes(status)) {
+        update.resolvedAt = new Date();
+        update.resolvedBy = req.user.name;
+      }
+    }
+    if (adminNotes !== undefined) update.adminNotes = adminNotes;
+
+    const ticket = await BugReport.findByIdAndUpdate(req.params.id, update, { new: true });
+    if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
+    res.json(ticket);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 4. Upload screenshot for bug report
+app.post('/api/support/upload-screenshot', authMiddleware, upload.single('screenshot'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No image file uploaded' });
+    const buffer = req.file.buffer;
+    const filename = `screenshot_${Date.now()}_${req.file.originalname || 'image.png'}`;
+    const uploadThingFile = new File([buffer], filename, { type: req.file.mimetype || 'image/png' });
+    const uploadResult = await utapi.uploadFiles(uploadThingFile);
+    if (!uploadResult || uploadResult.error) {
+      return res.status(500).json({ error: uploadResult?.error?.message || 'Screenshot upload failed' });
+    }
+    const screenshotUrl = uploadResult.data?.url || uploadResult.data?.appUrl;
+    res.json({ url: screenshotUrl });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

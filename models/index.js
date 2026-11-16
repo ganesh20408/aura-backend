@@ -21,6 +21,8 @@ const UserSchema = new mongoose.Schema({
   },
   isApproved: { type: Boolean, default: true },
   isPrimaryAdmin: { type: Boolean, default: false },
+  isPlacementInCharge: { type: Boolean, default: false },
+  placementDepartment: { type: String, default: null },
   pushTokens: { type: [String], default: [] },
   clubs: {
     tech: { type: [String], default: [] },
@@ -112,10 +114,67 @@ const NotificationSchema = new mongoose.Schema({
   targetVolunteeringGroups: { type: [String], default: [] }
 }, { timestamps: true });
 
+// 6. HIRING & JOB UPDATES SCHEMA (Per-Department Approvals + Global Admin Override)
+const JobUpdateSchema = new mongoose.Schema({
+  company: { type: String, required: true },
+  role: { type: String, required: true },
+  jobType: { type: String, enum: ['Internship', 'Full-Time', 'Part-Time', 'Hiring Challenge'], default: 'Internship' },
+  description: { type: String, required: true },
+  applyUrl: { type: String, required: true },
+  sourceUrl: { type: String, default: '' },
+  location: { type: String, default: 'On-site / Hybrid' },
+  stipendOrSalary: { type: String, default: 'Competitive' },
+  deadline: { type: String, default: '' },
+  targetDepartments: { type: [String], default: [] },
+  targetYears: { type: [Number], default: [3, 4] },
+  creatorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  creatorName: { type: String, default: 'Placement Coordinator' },
+  creatorRole: { type: String, default: 'Admin' },
+  departmentApprovals: [{
+    department: { type: String, required: true },
+    status: { type: String, enum: ['Pending', 'Published', 'Rejected'], default: 'Pending' },
+    approvedBy: { type: String, default: null },
+    approvedById: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    approvedAt: { type: Date, default: null },
+    notifiedCount: { type: Number, default: 0 }
+  }],
+  isGloballyPublished: { type: Boolean, default: false },
+  globalApprovedBy: { type: String, default: null },
+  globalApprovedAt: { type: Date, default: null }
+}, { timestamps: true });
+
+// 7. BUG REPORTS & SUPPORT TICKETS SCHEMA
+const BugReportSchema = new mongoose.Schema({
+  category: { type: String, required: true },
+  title: { type: String, required: true },
+  description: { type: String, required: true },
+  severity: { type: String, enum: ['Low', 'Medium', 'High', 'Critical'], default: 'Medium' },
+  screenshotUrl: { type: String, default: null },
+  deviceInfo: {
+    os: { type: String, default: 'Unknown' },
+    osVersion: { type: String, default: 'Unknown' },
+    appVersion: { type: String, default: '2.0.0' },
+    screenDimensions: { type: String, default: '' },
+    deviceBrand: { type: String, default: '' },
+    platform: { type: String, default: '' }
+  },
+  reporterId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  reporterName: { type: String, required: true },
+  reporterRole: { type: String, required: true },
+  reporterDepartment: { type: String, default: null },
+  reporterUsername: { type: String, default: '' },
+  status: { type: String, enum: ['Open', 'Investigating', 'Resolved', 'Closed'], default: 'Open' },
+  adminNotes: { type: String, default: '' },
+  resolvedAt: { type: Date, default: null },
+  resolvedBy: { type: String, default: null }
+}, { timestamps: true });
+
 module.exports = {
   User: mongoose.model('User', UserSchema),
   Resource: mongoose.model('Resource', ResourceSchema),
   Question: mongoose.model('Question', QuestionSchema),
   Guide: mongoose.model('Guide', GuideSchema),
-  Notification: mongoose.model('Notification', NotificationSchema)
+  Notification: mongoose.model('Notification', NotificationSchema),
+  JobUpdate: mongoose.model('JobUpdate', JobUpdateSchema),
+  BugReport: mongoose.model('BugReport', BugReportSchema)
 };
