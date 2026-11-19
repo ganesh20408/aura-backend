@@ -179,6 +179,28 @@ const BugReportSchema = new mongoose.Schema({
   resolvedBy: { type: String, default: null }
 }, { timestamps: true });
 
+// 8. NATIONAL OPPORTUNITIES, WEBINARS & STUDENT PERKS SCHEMA
+const OpportunitySchema = new mongoose.Schema({
+  title: { type: String, required: true },
+  category: { 
+    type: String, 
+    enum: ['Webinars & Scholarships', 'Hackathons & Internships', 'Developer Tools & Perks'], 
+    required: true 
+  },
+  provider: { type: String, required: true }, // e.g. 'Scaler', 'GeeksforGeeks', 'Unstop', 'GitHub', 'Notion', 'Canva'
+  badge: { type: String, default: '100% Free' }, // e.g. '100% Free', 'Govt / National', 'Verified Perk', 'Certificate Included'
+  description: { type: String, required: true },
+  perks: { type: [String], default: [] }, // e.g. ['Free Certificate', 'No Registration Fee', 'Open to All Branches']
+  actionUrl: { type: String, required: true },
+  actionText: { type: String, default: 'Register for Free' },
+  deadline: { type: String, default: 'Ongoing' },
+  targetYears: { type: [Number], default: [1, 2, 3, 4, 5] },
+  targetDepartments: { type: [String], default: [] }, // empty = all depts
+  clicks: { type: Number, default: 0 },
+  isFeatured: { type: Boolean, default: false },
+  createdBy: { type: String, default: 'Admin' }
+}, { timestamps: true });
+
 module.exports = {
   User: mongoose.model('User', UserSchema),
   Resource: mongoose.model('Resource', ResourceSchema),
@@ -186,5 +208,6 @@ module.exports = {
   Guide: mongoose.model('Guide', GuideSchema),
   Notification: mongoose.model('Notification', NotificationSchema),
   JobUpdate: mongoose.model('JobUpdate', JobUpdateSchema),
-  BugReport: mongoose.model('BugReport', BugReportSchema)
+  BugReport: mongoose.model('BugReport', BugReportSchema),
+  Opportunity: mongoose.model('Opportunity', OpportunitySchema)
 };

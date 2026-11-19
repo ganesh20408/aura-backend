@@ -16,7 +16,7 @@ const {
   STANDARD_SEMESTERS,
   EXTENDED_SEMESTERS
 } = require('./constants/enums');
-const { User, Resource, Question, Guide, Notification, JobUpdate, BugReport } = require('./models');
+const { User, Resource, Question, Guide, Notification, JobUpdate, BugReport, Opportunity } = require('./models');
 
 const app = express();
 app.use(express.json({ limit: '25mb' }));
@@ -1562,6 +1562,273 @@ app.post('/api/support/upload-screenshot', authMiddleware, upload.single('screen
     }
     const screenshotUrl = uploadResult.data?.url || uploadResult.data?.appUrl;
     res.json({ url: screenshotUrl });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================================
+// NATIONAL OPPORTUNITIES, WEBINARS & STUDENT PERKS (CURATED PERKS & SCHOLARSHIPS)
+// ============================================================================
+const DEFAULT_OPPORTUNITIES = [
+  // 1. FREE WEBINARS & SCHOLARSHIP TESTS (CPL)
+  {
+    title: 'FAANG System Design & DSA Masterclass + 100% Tech Scholarship',
+    category: 'Webinars & Scholarships',
+    provider: 'Scaler Academy',
+    badge: '100% Free Live',
+    description: 'Exclusive 2-hour interactive masterclass on high-level system architecture and graph algorithms led by ex-Google/Microsoft tech leads. Includes free registration for the National Tech Scholarship challenge.',
+    perks: ['Free Certificate of Participation', '₹0 Registration Fee', '100% Scholarship Eligibility', 'Live Q&A with Senior Engineers'],
+    actionUrl: 'https://www.scaler.com/events/',
+    actionText: 'Register Free for Masterclass',
+    deadline: 'This Weekend (Limited Free Seats)',
+    targetYears: [1, 2, 3, 4, 5],
+    isFeatured: true
+  },
+  {
+    title: 'Mega Job-A-Thon & Placement Problem Solving Bootcamp',
+    category: 'Webinars & Scholarships',
+    provider: 'GeeksforGeeks',
+    badge: 'Official Campus Contest',
+    description: 'Bi-weekly national competitive coding challenge + live solution breakdown workshop. Top performers receive direct recruitment interview referrals to 50+ hiring partner companies.',
+    perks: ['Free Entry for Engineering Students', 'Detailed Rank Card', 'Direct Interview Referrals', 'Practice Real Interview Problems'],
+    actionUrl: 'https://practice.geeksforgeeks.org/events',
+    actionText: 'Enroll in Free Bootcamp',
+    deadline: 'Ongoing Bi-Weekly',
+    targetYears: [2, 3, 4, 5],
+    isFeatured: true
+  },
+  {
+    title: 'All-India National Engineering & GATE Scholarship Mock Test',
+    category: 'Webinars & Scholarships',
+    provider: 'Unacademy Engineering',
+    badge: 'National Mock Assessment',
+    description: 'National benchmark exam for computer science, electronics, and mechanical undergraduates. Get an All-India Percentile assessment, video solutions, and comprehensive analysis of weak concepts.',
+    perks: ['Free All-India Rank Card', 'Curated by Top Educators', 'Detailed Video Solutions', 'Zero Exam Fee'],
+    actionUrl: 'https://unacademy.com/scholarship',
+    actionText: 'Take Free Mock Test',
+    deadline: 'Upcoming Sunday',
+    targetYears: [1, 2, 3, 4, 5],
+    isFeatured: false
+  },
+
+  // 2. HACKATHONS & INTERNSHIPS (Referral / Bounty)
+  {
+    title: 'Unstop National Collegiate Innovation Hackathon & League',
+    category: 'Hackathons & Internships',
+    provider: 'Unstop',
+    badge: 'National Championship',
+    description: 'Flagship open collegiate hackathon with web, mobile, and AI tracks. Solve real-world corporate problem statements, win from a ₹5,00,000 cash pool, and receive fast-tracked summer internship offers.',
+    perks: ['Cash Prizes Pool ₹5 Lakhs', 'Guaranteed PPI/PPO Shortlists', 'Mentorship from Industry Experts', 'Team or Solo Registration'],
+    actionUrl: 'https://unstop.com/hackathons',
+    actionText: 'Register Team for Free',
+    deadline: 'Registration Closes in 14 Days',
+    targetYears: [1, 2, 3, 4, 5],
+    isFeatured: true
+  },
+  {
+    title: 'Cuvette 1-Tap Tech Internships for College Undergraduates',
+    category: 'Hackathons & Internships',
+    provider: 'Cuvette Tech',
+    badge: 'Guaranteed Stipend Drives',
+    description: 'Direct student platform to apply for verified software engineering, frontend, backend, and data science internships with minimum stipends of ₹15,000 to ₹40,000/month. No prior experience required for junior roles.',
+    perks: ['Verified Tech Companies Only', 'Minimum ₹15k - ₹40k/month Stipend', '1-Tap Easy Apply', 'Remote & Hybrid Options'],
+    actionUrl: 'https://cuvette.tech/',
+    actionText: 'Explore Verified Internships',
+    deadline: 'Immediate Openings Available',
+    targetYears: [1, 2, 3, 4, 5],
+    isFeatured: true
+  },
+  {
+    title: 'HackerEarth Global Collegiate Coding Challenge',
+    category: 'Hackathons & Internships',
+    provider: 'HackerEarth',
+    badge: 'Global Coding Sprint',
+    description: 'Compete in a 3-hour algorithmic sprint designed by tech recruiters. Your code quality and speed are directly reviewed by partner talent acquisition teams looking for 2026/2027 interns.',
+    perks: ['Direct Recruiter Review', 'International Certificate', 'Global Leaderboard', '100% Free Entry'],
+    actionUrl: 'https://www.hackerearth.com/challenges/',
+    actionText: 'Join Challenge for Free',
+    deadline: 'Open Registration',
+    targetYears: [1, 2, 3, 4, 5],
+    isFeatured: false
+  },
+  {
+    title: 'Internshala National Summer Internship Fair',
+    category: 'Hackathons & Internships',
+    provider: 'Internshala',
+    badge: 'All Departments Eligible',
+    description: 'Government-recognized national student internship gateway. Access over 10,000+ internship openings across technical, non-technical, design, core engineering, and research fields.',
+    perks: ['10,000+ Verified Openings', 'All Engineering Departments Eligible', 'Official Work Certificate', 'Zero Fees'],
+    actionUrl: 'https://internshala.com/internships',
+    actionText: 'Apply for Free Internships',
+    deadline: 'Summer Placement Season',
+    targetYears: [1, 2, 3, 4, 5],
+    isFeatured: false
+  },
+
+  // 3. STUDENT DEVELOPER PACKS & TOOLS (Free Activations)
+  {
+    title: 'GitHub Student Developer Pack ($200,000+ Free Value)',
+    category: 'Developer Tools & Perks',
+    provider: 'GitHub Education',
+    badge: 'Official Student Benefit',
+    description: 'Get free access to the world\'s best developer tools while you are a student! Includes free GitHub Copilot, $200 DigitalOcean cloud credits, free Namecheap .me domain & SSL, JetBrains IDE pack, and Canva Pro.',
+    perks: ['Free GitHub Copilot Access', '$200 Cloud Hosting Credits', 'Free Domain & SSL Certificate', 'JetBrains All-Product Pack'],
+    actionUrl: 'https://education.github.com/pack',
+    actionText: 'Claim Free Student Pack',
+    deadline: 'Active While in College',
+    targetYears: [1, 2, 3, 4, 5],
+    isFeatured: true
+  },
+  {
+    title: 'Notion for Education (Plus Plan with AI Unlimited)',
+    category: 'Developer Tools & Perks',
+    provider: 'Notion Education',
+    badge: 'Free Academic Upgrade',
+    description: 'Upgrade your personal Notion workspace to the premium Plus Plan ($120/year value) 100% free by simply signing up with your college email ID. Includes unlimited page uploads and collaborative project boards.',
+    perks: ['Free $120/yr Plus Plan', 'Unlimited Blocks & File Uploads', 'Integrated Exam & Semester Roadmaps', 'Collaborative Group Projects'],
+    actionUrl: 'https://www.notion.so/product/notion-for-education',
+    actionText: 'Activate Free Notion Plus',
+    deadline: 'Instant Verification with College Email',
+    targetYears: [1, 2, 3, 4, 5],
+    isFeatured: true
+  },
+  {
+    title: 'Canva for Education & Creative Design Suite',
+    category: 'Developer Tools & Perks',
+    provider: 'Canva',
+    badge: 'Pro Tier Access',
+    description: 'Unlock 100+ million premium photos, fonts, graphics, presentation templates, and video editing tools for your college project presentations, club fests, and research posters.',
+    perks: ['100M+ Premium Design Assets', 'One-Click Background Remover', 'Presentation & Poster Templates', 'Zero Cost for Students'],
+    actionUrl: 'https://www.canva.com/education/students/',
+    actionText: 'Claim Free Canva Student',
+    deadline: 'Ongoing Student Program',
+    targetYears: [1, 2, 3, 4, 5],
+    isFeatured: false
+  },
+  {
+    title: 'Microsoft Azure for Students ($100 Cloud Credits + 25+ Free Services)',
+    category: 'Developer Tools & Perks',
+    provider: 'Microsoft Azure',
+    badge: 'No Credit Card Needed',
+    description: 'Build apps, train AI models, and host web servers in the cloud. Get $100 in Azure credits valid for 12 months, plus access to free developer tools and virtual machines without requiring a credit card.',
+    perks: ['$100 Free Azure Credits', 'No Credit Card Required', 'Free AI & Machine Learning APIs', 'Linux/Windows Cloud VMs'],
+    actionUrl: 'https://azure.microsoft.com/en-us/free/students/',
+    actionText: 'Get $100 Azure Credits',
+    deadline: 'Renewable Annually with Student ID',
+    targetYears: [1, 2, 3, 4, 5],
+    isFeatured: false
+  },
+  {
+    title: 'AWS Educate & Cloud Learning Sandbox',
+    category: 'Developer Tools & Perks',
+    provider: 'Amazon Web Services',
+    badge: 'Free Cloud Sandbox',
+    description: 'Hands-on training labs directly on AWS console with no payment details required. Complete self-paced cloud engineering badges and receive official AWS completion credentials.',
+    perks: ['Free Hands-On Cloud Labs', 'No Credit Card Required', 'Official AWS Digital Badges', 'Direct Access to AWS Job Board'],
+    actionUrl: 'https://aws.amazon.com/education/awseducate/',
+    actionText: 'Join AWS Educate Free',
+    deadline: 'Instant Enrollment',
+    targetYears: [1, 2, 3, 4, 5],
+    isFeatured: false
+  }
+];
+
+// 1. Get Opportunities (auto-seed if empty in DB)
+app.get('/api/opportunities', authMiddleware, async (req, res) => {
+  try {
+    const { category, search } = req.query;
+    let count = await Opportunity.countDocuments();
+    if (count === 0) {
+      await Opportunity.insertMany(DEFAULT_OPPORTUNITIES);
+    }
+
+    const filter = {};
+    if (category && category !== 'All') {
+      filter.category = category;
+    }
+    if (search && search.trim()) {
+      const q = search.trim();
+      filter.$or = [
+        { title: { $regex: q, $options: 'i' } },
+        { provider: { $regex: q, $options: 'i' } },
+        { description: { $regex: q, $options: 'i' } }
+      ];
+    }
+
+    const opportunities = await Opportunity.find(filter).sort({ isFeatured: -1, createdAt: -1 });
+    res.json(opportunities);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 2. Track click on an opportunity
+app.post('/api/opportunities/:id/click', authMiddleware, async (req, res) => {
+  try {
+    const opp = await Opportunity.findByIdAndUpdate(
+      req.params.id,
+      { $inc: { clicks: 1 } },
+      { new: true }
+    );
+    if (!opp) return res.status(404).json({ error: 'Opportunity not found' });
+    res.json({ success: true, clicks: opp.clicks });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 3. Create new opportunity (Admin only)
+app.post('/api/opportunities', authMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'Admin') {
+      return res.status(403).json({ error: 'Admin access required to create opportunities' });
+    }
+    const { title, category, provider, badge, description, perks, actionUrl, actionText, deadline, isFeatured } = req.body;
+    if (!title || !category || !provider || !description || !actionUrl) {
+      return res.status(400).json({ error: 'Title, category, provider, description, and actionUrl are required.' });
+    }
+    const opp = await Opportunity.create({
+      title,
+      category,
+      provider,
+      badge: badge || '100% Free',
+      description,
+      perks: Array.isArray(perks) ? perks : (perks ? perks.split(',').map((p) => p.trim()) : []),
+      actionUrl,
+      actionText: actionText || 'Register for Free',
+      deadline: deadline || 'Ongoing',
+      isFeatured: !!isFeatured,
+      createdBy: req.user.name
+    });
+    res.status(201).json(opp);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 4. Update opportunity (e.g. custom referral link, Admin only)
+app.put('/api/opportunities/:id', authMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'Admin') {
+      return res.status(403).json({ error: 'Admin access required' });
+    }
+    const opp = await Opportunity.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    if (!opp) return res.status(404).json({ error: 'Opportunity not found' });
+    res.json(opp);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 5. Delete opportunity (Admin only)
+app.delete('/api/opportunities/:id', authMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'Admin') {
+      return res.status(403).json({ error: 'Admin access required' });
+    }
+    await Opportunity.findByIdAndDelete(req.params.id);
+    res.json({ success: true, message: 'Opportunity deleted successfully' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
