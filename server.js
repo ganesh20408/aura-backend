@@ -1778,11 +1778,12 @@ app.post('/api/opportunities/:id/click', authMiddleware, async (req, res) => {
   }
 });
 
-// 3. Create new opportunity (Admin only)
+// 3. Create new opportunity (Primary Admin only)
 app.post('/api/opportunities', authMiddleware, async (req, res) => {
   try {
-    if (req.user.role !== 'Admin') {
-      return res.status(403).json({ error: 'Admin access required to create opportunities' });
+    const isMain = await isMainAdmin(req.user);
+    if (!isMain) {
+      return res.status(403).json({ error: 'Access denied: Only the Primary Administrator has permission to create opportunities.' });
     }
     const { title, category, provider, badge, description, perks, actionUrl, actionText, deadline, isFeatured } = req.body;
     if (!title || !category || !provider || !description || !actionUrl) {
@@ -1807,11 +1808,12 @@ app.post('/api/opportunities', authMiddleware, async (req, res) => {
   }
 });
 
-// 4. Update opportunity (e.g. custom referral link, Admin only)
+// 4. Update opportunity (e.g. custom referral link, Primary Admin only)
 app.put('/api/opportunities/:id', authMiddleware, async (req, res) => {
   try {
-    if (req.user.role !== 'Admin') {
-      return res.status(403).json({ error: 'Admin access required' });
+    const isMain = await isMainAdmin(req.user);
+    if (!isMain) {
+      return res.status(403).json({ error: 'Access denied: Only the Primary Administrator has permission to update opportunity and referral links.' });
     }
     const opp = await Opportunity.findByIdAndUpdate(req.params.id, req.body, { new: true });
     if (!opp) return res.status(404).json({ error: 'Opportunity not found' });
@@ -1821,11 +1823,12 @@ app.put('/api/opportunities/:id', authMiddleware, async (req, res) => {
   }
 });
 
-// 5. Delete opportunity (Admin only)
+// 5. Delete opportunity (Primary Admin only)
 app.delete('/api/opportunities/:id', authMiddleware, async (req, res) => {
   try {
-    if (req.user.role !== 'Admin') {
-      return res.status(403).json({ error: 'Admin access required' });
+    const isMain = await isMainAdmin(req.user);
+    if (!isMain) {
+      return res.status(403).json({ error: 'Access denied: Only the Primary Administrator has permission to delete opportunities.' });
     }
     await Opportunity.findByIdAndDelete(req.params.id);
     res.json({ success: true, message: 'Opportunity deleted successfully' });
